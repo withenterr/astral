@@ -9,6 +9,10 @@ function normalizeText(value, maxLength) {
     .slice(0, maxLength);
 }
 
+function normalizeNameKey(value) {
+  return value.toLocaleLowerCase();
+}
+
 function buildSystemMessage(text, createId, clock) {
   return {
     id: createId(),
@@ -65,6 +69,14 @@ export function createChatStore({
 
     if (!normalizedName) {
       throw new Error("Please enter a display name.");
+    }
+
+    const isNameTaken = [...sessions.values()].some((session) => {
+      return normalizeNameKey(session.name) === normalizeNameKey(normalizedName);
+    });
+
+    if (isNameTaken) {
+      throw new Error("That name is already in use. Please choose another one.");
     }
 
     const session = {

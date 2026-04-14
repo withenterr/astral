@@ -132,8 +132,8 @@ const server = http.createServer(async (request, response) => {
         snapshot: store.getSnapshot(),
       });
       broadcast(event);
-    } catch {
-      sendJson(response, 400, { error: "Please enter a display name." });
+    } catch (error) {
+      sendJson(response, 400, { error: error.message || "Please enter a display name." });
     }
     return;
   }

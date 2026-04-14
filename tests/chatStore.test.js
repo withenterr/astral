@@ -35,6 +35,16 @@ test("addMessage stores a trimmed chat message for the joined user", () => {
   assert.equal(message.text, "Hello world");
 });
 
+test("join rejects duplicate names even with different casing", () => {
+  const store = createDeterministicStore();
+
+  store.join("john");
+
+  assert.throws(() => {
+    store.join("John");
+  }, /already in use/i);
+});
+
 test("leave removes the participant and appends a system event", () => {
   const store = createDeterministicStore();
   const { session } = store.join("Cara");
