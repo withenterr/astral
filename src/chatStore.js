@@ -161,6 +161,7 @@ export function createChatStore({
   function touchSession(sessionId) {
     const session = getSessionOrThrow(sessionId);
     session.lastSeenAt = clock();
+    return serializeSession(session);
   }
 
   function grantRole(sessionId, role) {

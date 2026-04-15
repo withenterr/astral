@@ -17,6 +17,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = process.cwd();
 const ACCOUNT_DATA_PATH = join(ROOT, "data", "accounts.json");
+const ACCOUNT_SWEEP_MS = 60 * 60 * 1000;
 const PRESENCE_MAX_IDLE_MS = 30_000;
 const PRESENCE_SWEEP_MS = 10_000;
 const ADMIN_REDEEM_CODE_HASH =
@@ -62,6 +63,16 @@ function persistAccounts() {
     `${JSON.stringify({ accounts: accountStore.serializeAccounts() }, null, 2)}\n`,
     "utf8",
   );
+}
+
+function cleanupExpiredAccounts() {
+  const removedUsernames = accountStore.cleanupExpiredAccounts();
+
+  if (removedUsernames.length > 0) {
+    persistAccounts();
+  }
+
+  return removedUsernames;
 }
 
 function hashValue(value) {
@@ -197,6 +208,7 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (request.method === "GET" && pathname === "/api/auth/availability") {
+    cleanupExpiredAccounts();
     const username = url.searchParams.get("username") || "";
     sendJson(response, 200, accountStore.getAvailability(username));
     return;
@@ -204,6 +216,7 @@ const server = http.createServer(async (request, response) => {
 
   if (request.method === "POST" && pathname === "/api/auth/sign-up") {
     try {
+      cleanupExpiredAccounts();
       const { username, password } = await readBody(request);
       const account = accountStore.signUp(username, password);
       persistAccounts();
@@ -216,8 +229,10 @@ const server = http.createServer(async (request, response) => {
 
   if (request.method === "POST" && pathname === "/api/auth/sign-in") {
     try {
+      cleanupExpiredAccounts();
       const { username, password } = await readBody(request);
       const account = accountStore.signIn(username, password);
+      persistAccounts();
       sendJson(response, 200, { ok: true, account });
     } catch (error) {
       sendJson(response, 400, { error: error.message || "No such account." });
@@ -233,7 +248,11 @@ const server = http.createServer(async (request, response) => {
   if (request.method === "POST" && pathname === "/api/join") {
     try {
       const { name } = await readBody(request);
+      const accountTouched = accountStore.touchByUsername(name);
       const { session, event } = store.join(name);
+      if (accountTouched) {
+        persistAccounts();
+      }
       sendJson(response, 200, {
         roomName: "Global Room",
         session,
@@ -282,7 +301,10 @@ const server = http.createServer(async (request, response) => {
   if (request.method === "POST" && pathname === "/api/ping") {
     try {
       const { sessionId } = await readBody(request);
-      store.touchSession(sessionId);
+      const touchedSession = store.touchSession(sessionId);
+      if (accountStore.touchByUsername(touchedSession.name)) {
+        persistAccounts();
+      }
       sendJson(response, 200, { ok: true });
     } catch (error) {
       sendJson(response, 400, { error: error.message });
@@ -365,6 +387,8 @@ const server = http.createServer(async (request, response) => {
   serveStatic(request, response);
 });
 
+cleanupExpiredAccounts();
+setInterval(cleanupExpiredAccounts, ACCOUNT_SWEEP_MS);
 setInterval(cleanupInactiveSessions, PRESENCE_SWEEP_MS);
 
 server.listen(PORT, HOST, () => {

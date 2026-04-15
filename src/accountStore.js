@@ -2,6 +2,8 @@ import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
 const DEFAULT_MAX_USERNAME_LENGTH = 24;
 const DEFAULT_MAX_PASSWORD_LENGTH = 72;
+const DEFAULT_MAX_UNUSED_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_TOUCH_THROTTLE_MS = 60 * 60 * 1000;
 
 function normalizeUsername(value) {
   return String(value || "")
@@ -51,6 +53,7 @@ function serializeAccount(account) {
     id: account.id,
     username: account.username,
     passwordHash: account.passwordHash,
+    lastUsedAt: account.lastUsedAt,
   };
 }
 
@@ -63,9 +66,12 @@ function serializePublicAccount(account) {
 
 export function createAccountStore({
   accounts = [],
+  clock = () => Date.now(),
   idGenerator = () => crypto.randomUUID(),
+  maxUnusedMs = DEFAULT_MAX_UNUSED_MS,
   passwordHasher = hashPassword,
   passwordVerifier = verifyPassword,
+  touchThrottleMs = DEFAULT_TOUCH_THROTTLE_MS,
 } = {}) {
   const accountsById = new Map();
   const accountIdsByUsername = new Map();
@@ -85,10 +91,27 @@ export function createAccountStore({
       id: String(account.id),
       username,
       passwordHash: String(account.passwordHash),
+      lastUsedAt: Number.isFinite(account.lastUsedAt) ? account.lastUsedAt : clock(),
     };
 
     accountsById.set(normalizedAccount.id, normalizedAccount);
     accountIdsByUsername.set(normalizeUsernameKey(username), normalizedAccount.id);
+  }
+
+  function markUsed(account, force = false) {
+    const now = clock();
+
+    if (!force && now - account.lastUsedAt < touchThrottleMs) {
+      return false;
+    }
+
+    account.lastUsedAt = now;
+    return true;
+  }
+
+  function removeAccount(account) {
+    accountsById.delete(account.id);
+    accountIdsByUsername.delete(normalizeUsernameKey(account.username));
   }
 
   function getAvailability(username) {
@@ -126,6 +149,7 @@ export function createAccountStore({
       id: idGenerator(),
       username: normalizedUsername,
       passwordHash: passwordHasher(validatePassword(password)),
+      lastUsedAt: clock(),
     };
 
     accountsById.set(account.id, account);
@@ -149,7 +173,40 @@ export function createAccountStore({
       throw new Error("No such account.");
     }
 
+    markUsed(account, true);
+
     return serializePublicAccount(account);
+  }
+
+  function touchByUsername(username) {
+    const normalizedUsername = normalizeUsername(username);
+    const accountId = accountIdsByUsername.get(normalizeUsernameKey(normalizedUsername));
+
+    if (!accountId) {
+      return false;
+    }
+
+    const account = accountsById.get(accountId);
+
+    if (!account) {
+      return false;
+    }
+
+    return markUsed(account);
+  }
+
+  function cleanupExpiredAccounts() {
+    const now = clock();
+    const removedUsernames = [];
+
+    for (const account of accountsById.values()) {
+      if (now - account.lastUsedAt >= maxUnusedMs) {
+        removedUsernames.push(account.username);
+        removeAccount(account);
+      }
+    }
+
+    return removedUsernames;
   }
 
   function serializeAccounts() {
@@ -159,9 +216,11 @@ export function createAccountStore({
   }
 
   return {
+    cleanupExpiredAccounts,
     getAvailability,
     serializeAccounts,
     signIn,
     signUp,
+    touchByUsername,
   };
 }
